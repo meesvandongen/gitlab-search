@@ -16,7 +16,7 @@ gls                      # open picker
 gls --help               # show help
 gls --log                # enable info logs
 gls --debug              # enable debug logs (includes info if --log also set)
-# Note: clone trigger key is fixed to `ctrl-c` in the picker
+# Note: clone trigger key is fixed to `tab` in the picker
 ```
 
 On first run (cold start) all projects are fetched before showing picker. Subsequent runs read cache immediately; refresh runs in the background unless throttled.

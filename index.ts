@@ -441,7 +441,7 @@ async function pickProject(): Promise<PickResult | undefined> {
 	if (!fzfExists) fatal("fzf is required. Please install it and retry.");
 	{
 		const input = rows.map((r) => `${r.full_path}\t${r.name}`).join("\n");
-		const expectArg = `--expect=ctrl-c`;
+		const expectArg = `--expect=tab`;
 		const proc = Bun.spawn(
 			["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"],
 			{
@@ -581,7 +581,7 @@ Environment Variables:
 	GLS_POST_CLONE_ACTION            Optional shell command to run from the cloned repository directory after clone or when the repo already exists (example: "code .")
 
 	Notes:
-	The clone trigger key in the picker is fixed to 'ctrl-c'.
+	The clone trigger key in the picker is fixed to 'tab'.
 `);
 }
 
