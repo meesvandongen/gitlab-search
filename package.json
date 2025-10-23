@@ -1,12 +1,24 @@
 {
-  "name": "gitlab-search",
-  "module": "index.ts",
-  "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+	"name": "gitlab-search",
+	"version": "0.0.1",
+	"description": "Interactive GitLab project search CLI (gls) with SWR caching",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"gls": "index.ts"
+	},
+	"module": "index.ts",
+	"scripts": {
+		"gls": "bun run index.ts",
+		"dev": "bun run index.ts -- --debug"
+	},
+	"dependencies": {
+		"already": "^3.4.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
 }

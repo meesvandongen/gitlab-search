@@ -15,6 +15,17 @@ logs
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
+# SQLite local cache (gls)
+gls.db
+gls.db-wal
+gls.db-shm
+gls.db-journal
+*.sqlite
+*.db
+
+# Bun runtime cache (optional local artifacts)
+.bun
+
 # dotenv environment variable files
 .env
 .env.development.local
