@@ -1,4 +1,4 @@
-# gitlab-search (gls)
+# @mvd/gls (gitlab search)
 
 Interactive GitLab project search CLI with a local SQLite cache, stale-while-revalidate refreshing, and fuzzy selection via `fzf` (if installed).
 
