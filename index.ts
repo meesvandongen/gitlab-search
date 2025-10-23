@@ -101,7 +101,7 @@ let db: Database;
 
 function initDb(path: string) {
 	db = new Database(path);
-	db.exec(`CREATE TABLE IF NOT EXISTS projects (
+	db.run(`CREATE TABLE IF NOT EXISTS projects (
 		id INTEGER PRIMARY KEY,
 		name TEXT NOT NULL,
 		path TEXT NOT NULL,
@@ -113,11 +113,11 @@ function initDb(path: string) {
 		updated_at TEXT NOT NULL,
 		last_seen_at TEXT NOT NULL
 	);`);
-	db.exec(`CREATE TABLE IF NOT EXISTS meta (
+	db.run(`CREATE TABLE IF NOT EXISTS meta (
 		key TEXT PRIMARY KEY,
 		value TEXT
 	);`);
-	db.exec(
+	db.run(
 		`CREATE INDEX IF NOT EXISTS idx_projects_full_path ON projects(full_path);`,
 	);
 }
@@ -310,7 +310,7 @@ async function fetchAllMembershipProjects(): Promise<void> {
 
 async function fetchMembershipAndStorePage(page: number) {
 	const rows = await fetchMembershipProjectsPage(page, config.perPage);
-	db.exec("BEGIN");
+	db.run("BEGIN");
 	try {
 		for (const r of rows) {
 			upsertStmt.run(
@@ -324,9 +324,9 @@ async function fetchMembershipAndStorePage(page: number) {
 				r.namespace ?? null,
 			);
 		}
-		db.exec("COMMIT");
+		db.run("COMMIT");
 	} catch (e) {
-		db.exec("ROLLBACK");
+		db.run("ROLLBACK");
 		throw e;
 	}
 	log("DEBUG", `Stored ${rows.length} membership projects page=${page}`);
@@ -334,7 +334,7 @@ async function fetchMembershipAndStorePage(page: number) {
 
 async function fetchAndStorePage(scope: string, page: number) {
 	const rows = await fetchProjectsPage(scope, page, config.perPage);
-	db.exec("BEGIN");
+	db.run("BEGIN");
 	try {
 		for (const r of rows) {
 			upsertStmt.run(
@@ -348,9 +348,9 @@ async function fetchAndStorePage(scope: string, page: number) {
 				r.namespace ?? null,
 			);
 		}
-		db.exec("COMMIT");
+		db.run("COMMIT");
 	} catch (e) {
-		db.exec("ROLLBACK");
+		db.run("ROLLBACK");
 		throw e;
 	}
 	log("DEBUG", `Stored ${rows.length} projects scope=${scope} page=${page}`);
@@ -477,6 +477,10 @@ function openUrl(url: string) {
 		Bun.spawn(["open", url]);
 	} else if (process.platform === "linux") {
 		Bun.spawn(["xdg-open", url]);
+	} else if (process.platform === "win32") {
+		// Prefer explorer on Windows to open the URL with the default handler.
+		// explorer.exe handles URLs reliably and avoids quirks with cmd start quoting.
+		Bun.spawn(["explorer.exe", url]);
 	} else {
 		console.log(url); // fallback
 	}

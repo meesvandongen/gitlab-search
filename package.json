@@ -3,7 +3,32 @@
 	"version": "0.0.1",
 	"description": "Interactive GitLab project search CLI (gls) with SWR caching",
 	"type": "module",
-	"private": true,
+	"private": false,
+	"homepage": "https://github.com/meesvandongen/gitlab-search#readme",
+	"author": "Mees van Dongen",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/meesvandongen/gitlab-search.git"
+	},
+	"bugs": {
+		"url": "https://github.com/meesvandongen/gitlab-search/issues"
+	},
+	"keywords": [
+		"gitlab",
+		"search",
+		"cli",
+		"swr",
+		"gls",
+		"gitlab-search"
+	],
+	"files": [
+		"index.ts",
+		"README.md"
+	],
+	"engines": {
+		"bun": ">=1.0.0"
+	},
 	"bin": {
 		"gls": "index.ts"
 	},
