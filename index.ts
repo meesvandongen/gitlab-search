@@ -15,6 +15,18 @@ import { concurrent, retry } from "already";
 import path from "path";
 import { existsSync } from "fs";
 
+// Expand a leading tilde to the user's HOME directory. Only used for DB path.
+function untildify(p: string): string {
+	if (!p) return p;
+	// Only expand leading ~/ pattern. Leave other ~user forms untouched.
+	if (p.startsWith("~/")) {
+		const home = Bun.env.HOME || "";
+		// Use path.join to ensure proper separators on all platforms
+		return path.join(home, p.slice(2));
+	}
+	return p;
+}
+
 // ----------------------- Types -----------------------
 interface Config {
 	token: string;
@@ -53,7 +65,7 @@ function parseConfig(): Config {
 		.split(",")
 		.map((s) => s.trim())
 		.filter(Boolean);
-	const dbPath = env.GLS_DB_PATH || "gls.db";
+	const dbPath = env.GLS_DB_PATH || "~/gls.db";
 	const maxConcurrency = parseInt(env.GLS_MAX_CONCURRENCY || "8", 10) || 8;
 	const staleDays = parseInt(env.GLS_STALE_DAYS || "1", 10) || 1;
 	const minRefreshMinutes =
@@ -99,8 +111,9 @@ function fatal(msg: string): never {
 let config: Config; // assigned in main
 let db: Database;
 
-function initDb(path: string) {
-	db = new Database(path);
+function initDb(dbPath: string) {
+	const expanded = untildify(dbPath);
+	db = new Database(expanded);
 	db.run(`CREATE TABLE IF NOT EXISTS projects (
 		id INTEGER PRIMARY KEY,
 		name TEXT NOT NULL,
