@@ -173,6 +173,13 @@ function prepareStatements() {
 	upsertStmt = db.query(upsertStmtSql);
 }
 
+function clearDataStore() {
+	log("INFO", "Clearing data store...");
+	db.run("DELETE FROM projects");
+	db.run("DELETE FROM meta");
+	log("INFO", "Data store cleared successfully.");
+}
+
 // ----------------------- Network Helpers -----------------------
 async function gitlabFetch(
 	path: string,
@@ -576,6 +583,7 @@ Options:
 	--help            Show this help test
 	--debug           Enable debug logging
 	--log             Enable info-level logging
+	--reset           Clear data store and rebuild cache
 
 Requirements:
 	fzf must be installed.
@@ -604,15 +612,31 @@ async function main() {
 		showHelp();
 		return;
 	}
+
 	config = parseConfig();
 	initDb(config.dbPath);
 	prepareStatements();
+
+	const isReset = process.argv.includes("--reset");
+	
+	if (isReset) {
+		// Force logging to be enabled for reset operations
+		config.logInfo = true;
+		clearDataStore();
+		log("INFO", "Rebuilding data store...");
+		const ok = await performRefresh();
+		if (!ok) fatal("Data store rebuild failed.");
+		log("INFO", "Data store rebuild completed.");
+		return;
+	}
 
 	const hasProjects =
 		(db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c >
 		0;
 	const cold = !hasProjects;
 	if (cold) {
+		// Force logging to be enabled for initial data fetch
+		config.logInfo = true;
 		log("INFO", "Initial data fetch in progress...");
 		const ok = await performRefresh();
 		if (!ok) fatal("Initial fetch failed.");
