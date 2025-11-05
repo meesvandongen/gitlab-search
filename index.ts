@@ -40,6 +40,9 @@ interface Config {
 	logInfo: boolean;
 	perPage: number;
 	cloneDir?: string;
+	contexts?: string[]; // context prefixes for filtering
+	allFlag: boolean; // disable context filtering for this run
+	clearContextFlag: boolean; // clear stored contexts
 }
 
 interface ProjectRow {
@@ -63,7 +66,7 @@ function parseConfig(): Config {
 	);
 	const paths = (env.GITLAB_PATHS || "")
 		.split(",")
-		.map((s) => s.trim())
+		.map((s: string) => s.trim())
 		.filter(Boolean);
 	const dbPath = env.GLS_DB_PATH || "~/gls.db";
 	const maxConcurrency = parseInt(env.GLS_MAX_CONCURRENCY || "8", 10) || 8;
@@ -76,6 +79,34 @@ function parseConfig(): Config {
 		["1", "true", "yes", "on"].includes((env.GLS_LOG || "").toLowerCase());
 	const perPage = 100; // GitLab max typical page size
 	const cloneDir = env.GITLAB_CLONE_DIRECTORY || undefined;
+	const allFlag = process.argv.includes("--all");
+	const clearContextFlag = process.argv.includes("--clearcontext");
+	
+	// Parse --context parameter (supports both --context=value and --context value)
+	let contexts: string[] | undefined;
+	const contextArgIndex = process.argv.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
+	
+	if (contextArgIndex !== -1) {
+		let contextValue: string;
+		const contextArg = process.argv[contextArgIndex];
+		
+		if (contextArg.startsWith("--context=")) {
+			// Handle --context=value format
+			contextValue = contextArg.substring("--context=".length);
+		} else {
+			// Handle --context value format
+			if (contextArgIndex + 1 < process.argv.length) {
+				contextValue = process.argv[contextArgIndex + 1];
+			} else {
+				fatal("--context parameter requires a value");
+			}
+		}
+		
+		contexts = contextValue
+			.split(",")
+			.map((s: string) => s.trim())
+			.filter(Boolean);
+	}
 
 	if (!token)
 		fatal("Missing GITLAB_TOKEN env value. Set it in .env or environment.");
@@ -93,6 +124,9 @@ function parseConfig(): Config {
 		logInfo,
 		perPage,
 		cloneDir,
+		contexts,
+		allFlag,
+		clearContextFlag,
 	};
 }
 
@@ -130,8 +164,16 @@ function initDb(dbPath: string) {
 		key TEXT PRIMARY KEY,
 		value TEXT
 	);`);
+	db.run(`CREATE TABLE IF NOT EXISTS contexts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		prefix TEXT NOT NULL UNIQUE,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`);
 	db.run(
 		`CREATE INDEX IF NOT EXISTS idx_projects_full_path ON projects(full_path);`,
+	);
+	db.run(
+		`CREATE INDEX IF NOT EXISTS idx_contexts_prefix ON contexts(prefix);`,
 	);
 }
 
@@ -177,7 +219,73 @@ function clearDataStore() {
 	log("INFO", "Clearing data store...");
 	db.run("DELETE FROM projects");
 	db.run("DELETE FROM meta");
+	db.run("DELETE FROM contexts");
 	log("INFO", "Data store cleared successfully.");
+}
+
+// ----------------------- Context Management -----------------------
+function addContexts(contexts: string[]) {
+	if (!contexts || contexts.length === 0) return;
+	
+	const insertStmt = db.query("INSERT OR IGNORE INTO contexts (prefix) VALUES (?)");
+	db.run("BEGIN");
+	try {
+		for (const context of contexts) {
+			insertStmt.run(context);
+		}
+		db.run("COMMIT");
+		log("INFO", `Added ${contexts.length} context(s): ${contexts.join(", ")}`);
+	} catch (e) {
+		db.run("ROLLBACK");
+		throw e;
+	}
+}
+
+function getStoredContexts(): string[] {
+	const stmt = db.query("SELECT prefix FROM contexts ORDER BY prefix");
+	const rows = stmt.all() as { prefix: string }[];
+	return rows.map(row => row.prefix);
+}
+
+function clearStoredContexts() {
+	db.run("DELETE FROM contexts");
+	log("INFO", "Cleared all stored context filters.");
+}
+
+function filterProjectsByContexts(contexts: string[]): PickResult[] {
+	if (!contexts || contexts.length === 0) {
+		return loadAllProjects();
+	}
+	
+	// Build WHERE clause for matching any of the context prefixes
+	const placeholders = contexts.map(() => "full_path LIKE ?").join(" OR ");
+	const sql = `SELECT id, full_path, name, web_url FROM projects WHERE ${placeholders} ORDER BY full_path`;
+	const params = contexts.map(context => `${context}%`);
+	
+	log("DEBUG", `Filtering projects with contexts: ${contexts.join(", ")}`);
+	log("DEBUG", `SQL query: ${sql}`);
+	log("DEBUG", `Parameters: ${params.join(", ")}`);
+	
+	const stmt = db.query(sql);
+	const rows = stmt.all(...params) as {
+		id: number;
+		full_path: string;
+		name: string;
+		web_url: string;
+	}[];
+	
+	log("DEBUG", `Found ${rows.length} projects matching contexts`);
+	if (rows.length > 0 && config.debug) {
+		log("DEBUG", `First few matches: ${rows.slice(0, 3).map(r => r.full_path).join(", ")}`);
+	}
+	
+	return rows.map(r => ({
+		id: r.id,
+		full_path: r.full_path,
+		name: r.name,
+		web_url: r.web_url,
+		action: "open" as const,
+	}));
 }
 
 // ----------------------- Progress Bar -----------------------
@@ -511,10 +619,14 @@ function loadAllProjects(): PickResult[] {
 	return rows;
 }
 
-async function pickProject(initialQuery?: string): Promise<PickResult | undefined> {
-	const rows = loadAllProjects();
+async function pickProject(initialQuery?: string, contexts?: string[]): Promise<PickResult | undefined> {
+	const rows = contexts ? filterProjectsByContexts(contexts) : loadAllProjects();
 	if (rows.length === 0) {
-		log("WARN", "No projects available in cache.");
+		if (contexts && contexts.length > 0) {
+			log("WARN", `No projects found matching context prefixes: ${contexts.join(", ")}`);
+		} else {
+			log("WARN", "No projects available in cache.");
+		}
 		return undefined;
 	}
 	// Use fzf for interactive selection
@@ -652,11 +764,18 @@ Options:
 	--debug           Enable debug logging
 	--log             Enable info-level logging
 	--reset           Clear data store and rebuild cache
+	--context <prefixes>  Comma-separated list of full path prefixes to filter projects
+	                    (contexts are stored and automatically reused in future runs)
+	--clearcontext    Clear all stored context filters from database
+	--all             Disable context filtering for this run (search everything)
 
 Examples:
-	gls               Interactive project selection
-	gls identity      Search for projects matching "identity"
-	gls "my project"  Search for projects matching "my project"
+	gls               Interactive project selection (uses stored contexts if any)
+	gls identity      Search for projects matching "identity" (uses stored contexts if any)
+	gls "my project"  Search for projects matching "my project" (uses stored contexts if any)
+	gls --context "acme/backend,acme/frontend"  Set context filters (stored for future use)
+	gls --all         Search all projects, ignoring stored context filters
+	gls --clearcontext Clear stored context filters permanently
 
 Requirements:
 	fzf must be installed.
@@ -703,9 +822,54 @@ async function main() {
 		return;
 	}
 
-	// Extract positional arguments (non-flag arguments)
-	const positionalArgs = process.argv.slice(2).filter((arg: string) => !arg.startsWith("--"));
+	// Handle --clearcontext flag
+	if (config.clearContextFlag) {
+		clearStoredContexts();
+		return;
+	}
+
+	// Extract positional arguments (non-flag arguments and skip --context value)
+	let filteredArgs = process.argv.slice(2);
+	
+	// Remove --context and its value from the args for positional parsing
+	const contextArgIndex = filteredArgs.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
+	if (contextArgIndex !== -1) {
+		if (filteredArgs[contextArgIndex].startsWith("--context=")) {
+			// Remove just the --context=value argument
+			filteredArgs.splice(contextArgIndex, 1);
+		} else {
+			// Remove --context and its separate value argument
+			filteredArgs.splice(contextArgIndex, 2);
+		}
+	}
+	
+	// Filter out all flags to get positional arguments
+	const positionalArgs = filteredArgs.filter((arg: string) => 
+		!arg.startsWith("--") || arg.startsWith("--context=")
+	).filter((arg: string) => !arg.startsWith("--context="));
 	const initialQuery = positionalArgs.length > 0 ? positionalArgs.join(" ") : undefined;
+
+	// Add contexts to database if provided
+	if (config.contexts) {
+		addContexts(config.contexts);
+	}
+
+	// Get stored contexts from database and use them for filtering
+	const storedContexts = getStoredContexts();
+	let activeContexts: string[] | undefined;
+	
+	if (config.allFlag) {
+		// --all flag disables all context filtering for this run
+		activeContexts = undefined;
+		log("INFO", "Context filtering disabled for this run (--all flag)");
+	} else {
+		// Use provided contexts or stored contexts
+		activeContexts = config.contexts || (storedContexts.length > 0 ? storedContexts : undefined);
+		
+		if (activeContexts && activeContexts.length > 0) {
+			log("INFO", `Using context filters: ${activeContexts.join(", ")}`);
+		}
+	}
 
 	const hasProjects =
 		(db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c >
@@ -729,7 +893,7 @@ async function main() {
 		}
 	}
 
-	const picked = await pickProject(initialQuery);
+	const picked = await pickProject(initialQuery, activeContexts);
 	if (!picked) {
 		log("INFO", "No project selected.");
 		return;
