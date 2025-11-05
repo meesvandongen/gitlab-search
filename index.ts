@@ -15,6 +15,18 @@ import { concurrent, retry } from "already";
 import path from "path";
 import { existsSync } from "fs";
 
+// Expand a leading tilde to the user's HOME directory. Only used for DB path.
+function untildify(p: string): string {
+	if (!p) return p;
+	// Only expand leading ~/ pattern. Leave other ~user forms untouched.
+	if (p.startsWith("~/")) {
+		const home = Bun.env.HOME || "";
+		// Use path.join to ensure proper separators on all platforms
+		return path.join(home, p.slice(2));
+	}
+	return p;
+}
+
 // ----------------------- Types -----------------------
 interface Config {
 	token: string;
@@ -53,7 +65,7 @@ function parseConfig(): Config {
 		.split(",")
 		.map((s) => s.trim())
 		.filter(Boolean);
-	const dbPath = env.GLS_DB_PATH || "gls.db";
+	const dbPath = env.GLS_DB_PATH || "~/gls.db";
 	const maxConcurrency = parseInt(env.GLS_MAX_CONCURRENCY || "8", 10) || 8;
 	const staleDays = parseInt(env.GLS_STALE_DAYS || "1", 10) || 1;
 	const minRefreshMinutes =
@@ -99,8 +111,9 @@ function fatal(msg: string): never {
 let config: Config; // assigned in main
 let db: Database;
 
-function initDb(path: string) {
-	db = new Database(path);
+function initDb(dbPath: string) {
+	const expanded = untildify(dbPath);
+	db = new Database(expanded);
 	db.run(`CREATE TABLE IF NOT EXISTS projects (
 		id INTEGER PRIMARY KEY,
 		name TEXT NOT NULL,
@@ -202,7 +215,7 @@ async function getProjectCount(scope: string): Promise<number> {
 // Membership (user-access) projects count via REST headers fallback only
 async function getMembershipProjectCount(): Promise<number> {
 	const rest = await gitlabFetch(
-		`/api/v4/projects?membership=true&per_page=1&page=1&simple=true`,
+		`/api/v4/projects?membership=true&per_page=1&page=1&simple=true&archived=false`,
 	);
 	if (!rest.ok)
 		throw new Error(`REST membership first page failed: ${rest.status}`);
@@ -214,7 +227,7 @@ async function fetchMembershipProjectsPage(
 	page: number,
 	perPage: number,
 ): Promise<ProjectRow[]> {
-	const url = `/api/v4/projects?membership=true&per_page=${perPage}&page=${page}&simple=true`;
+	const url = `/api/v4/projects?membership=true&per_page=${perPage}&page=${page}&simple=true&archived=false`;
 	const res = await gitlabFetch(url);
 	if (!res.ok)
 		throw new Error(
@@ -248,7 +261,7 @@ async function fetchProjectsPage(
 	page: number,
 	perPage: number,
 ): Promise<ProjectRow[]> {
-	const url = `/api/v4/groups/${encodeURIComponent(scope)}/projects?per_page=${perPage}&page=${page}&with_shared=false&include_subgroups=true&simple=true`;
+	const url = `/api/v4/groups/${encodeURIComponent(scope)}/projects?per_page=${perPage}&page=${page}&with_shared=false&include_subgroups=true&simple=true&archived=false`;
 	const res = await gitlabFetch(url);
 	if (!res.ok)
 		throw new Error(
@@ -538,7 +551,7 @@ async function runPostCloneAction(projDir: string) {
 	log("INFO", `Running post-clone action in ${projDir}: ${action}`);
 	try {
 		// Run action via shell so users can provide compound commands like `code .`
-		const proc = Bun.spawn(["sh", "-lc", action], {
+		const proc = Bun.spawn(["zsh", "-lc", action], {
 			cwd: projDir,
 			stdout: "inherit",
 			stderr: "inherit",
@@ -560,7 +573,7 @@ function showHelp() {
 Usage: gls [options]
 
 Options:
-	--help            Show this help
+	--help            Show this help test
 	--debug           Enable debug logging
 	--log             Enable info-level logging
 
