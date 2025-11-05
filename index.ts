@@ -180,6 +180,51 @@ function clearDataStore() {
 	log("INFO", "Data store cleared successfully.");
 }
 
+// ----------------------- Progress Bar -----------------------
+class ProgressBar {
+	private total: number;
+	private current: number = 0;
+	private width: number = 40;
+	private lastOutput: string = "";
+
+	constructor(total: number) {
+		this.total = total;
+	}
+
+	update(current: number) {
+		this.current = current;
+		this.render();
+	}
+
+	increment() {
+		this.current++;
+		this.render();
+	}
+
+	private render() {
+		if (!config.logInfo) return; // Only show progress when logging is enabled
+
+		const percentage = Math.round((this.current / this.total) * 100);
+		const filled = Math.round((this.current / this.total) * this.width);
+		const empty = this.width - filled;
+		
+		const bar = "█".repeat(filled) + "░".repeat(empty);
+		const output = `\r[${bar}] ${percentage}% (${this.current}/${this.total})`;
+		
+		// Clear previous line and write new progress
+		if (this.lastOutput) {
+			process.stderr.write("\r" + " ".repeat(this.lastOutput.length) + "\r");
+		}
+		process.stderr.write(output);
+		this.lastOutput = output;
+	}
+
+	finish() {
+		if (!config.logInfo) return;
+		process.stderr.write("\n");
+	}
+}
+
 // ----------------------- Network Helpers -----------------------
 async function gitlabFetch(
 	path: string,
@@ -304,13 +349,21 @@ async function fetchAllProjectsForScope(scope: string): Promise<void> {
 	log("INFO", `Scope ${scope} total projects reported: ${total}`);
 	if (total === 0) return; // nothing to do
 	const totalPages = Math.ceil(total / config.perPage);
+	const progressBar = new ProgressBar(totalPages);
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
+	let completedPages = 0;
+	
 	await Promise.all(
 		pages.map((p) =>
-			limiter(() => retry(3, () => fetchAndStorePage(scope, p))),
+			limiter(async () => {
+				await retry(3, () => fetchAndStorePage(scope, p));
+				completedPages++;
+				progressBar.update(completedPages);
+			}),
 		),
 	);
+	progressBar.finish();
 }
 
 async function fetchAllMembershipProjects(): Promise<void> {
@@ -319,13 +372,21 @@ async function fetchAllMembershipProjects(): Promise<void> {
 	log("INFO", `Membership total projects reported: ${total}`);
 	if (total === 0) return;
 	const totalPages = Math.ceil(total / config.perPage);
+	const progressBar = new ProgressBar(totalPages);
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
+	let completedPages = 0;
+	
 	await Promise.all(
 		pages.map((p) =>
-			limiter(() => retry(3, () => fetchMembershipAndStorePage(p))),
+			limiter(async () => {
+				await retry(3, () => fetchMembershipAndStorePage(p));
+				completedPages++;
+				progressBar.update(completedPages);
+			}),
 		),
 	);
+	progressBar.finish();
 }
 
 async function fetchMembershipAndStorePage(page: number) {
