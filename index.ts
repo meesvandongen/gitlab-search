@@ -511,7 +511,7 @@ function loadAllProjects(): PickResult[] {
 	return rows;
 }
 
-async function pickProject(): Promise<PickResult | undefined> {
+async function pickProject(initialQuery?: string): Promise<PickResult | undefined> {
 	const rows = loadAllProjects();
 	if (rows.length === 0) {
 		log("WARN", "No projects available in cache.");
@@ -523,14 +523,18 @@ async function pickProject(): Promise<PickResult | undefined> {
 	{
 		const input = rows.map((r) => `${r.full_path}\t${r.name}`).join("\n");
 		const expectArg = `--expect=tab`;
-		const proc = Bun.spawn(
-			["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"],
-			{
-				stdin: "pipe",
-				stdout: "pipe",
-				stderr: "inherit",
-			},
-		);
+		const fzfArgs = ["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"];
+		
+		// Add initial query if provided
+		if (initialQuery) {
+			fzfArgs.push("--query", initialQuery);
+		}
+		
+		const proc = Bun.spawn(fzfArgs, {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "inherit",
+		});
 		if (proc.stdin) {
 			proc.stdin.write(input);
 			proc.stdin.end();
@@ -638,13 +642,21 @@ async function runPostCloneAction(projDir: string) {
 // ----------------------- Help -----------------------
 function showHelp() {
 	console.log(`GitLab Search CLI (gls)
-Usage: gls [options]
+Usage: gls [options] [query]
+
+Arguments:
+	query             Initial search query for fzf (optional)
 
 Options:
 	--help            Show this help test
 	--debug           Enable debug logging
 	--log             Enable info-level logging
 	--reset           Clear data store and rebuild cache
+
+Examples:
+	gls               Interactive project selection
+	gls identity      Search for projects matching "identity"
+	gls "my project"  Search for projects matching "my project"
 
 Requirements:
 	fzf must be installed.
@@ -691,6 +703,10 @@ async function main() {
 		return;
 	}
 
+	// Extract positional arguments (non-flag arguments)
+	const positionalArgs = process.argv.slice(2).filter((arg: string) => !arg.startsWith("--"));
+	const initialQuery = positionalArgs.length > 0 ? positionalArgs.join(" ") : undefined;
+
 	const hasProjects =
 		(db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c >
 		0;
@@ -713,7 +729,7 @@ async function main() {
 		}
 	}
 
-	const picked = await pickProject();
+	const picked = await pickProject(initialQuery);
 	if (!picked) {
 		log("INFO", "No project selected.");
 		return;
