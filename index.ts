@@ -40,6 +40,9 @@ interface Config {
 	logInfo: boolean;
 	perPage: number;
 	cloneDir?: string;
+	contexts?: string[]; // context prefixes for filtering
+	allFlag: boolean; // disable context filtering for this run
+	clearContextFlag: boolean; // clear stored contexts
 }
 
 interface ProjectRow {
@@ -63,7 +66,7 @@ function parseConfig(): Config {
 	);
 	const paths = (env.GITLAB_PATHS || "")
 		.split(",")
-		.map((s) => s.trim())
+		.map((s: string) => s.trim())
 		.filter(Boolean);
 	const dbPath = env.GLS_DB_PATH || "~/gls.db";
 	const maxConcurrency = parseInt(env.GLS_MAX_CONCURRENCY || "8", 10) || 8;
@@ -76,6 +79,34 @@ function parseConfig(): Config {
 		["1", "true", "yes", "on"].includes((env.GLS_LOG || "").toLowerCase());
 	const perPage = 100; // GitLab max typical page size
 	const cloneDir = env.GITLAB_CLONE_DIRECTORY || undefined;
+	const allFlag = process.argv.includes("--all");
+	const clearContextFlag = process.argv.includes("--clearcontext");
+	
+	// Parse --context parameter (supports both --context=value and --context value)
+	let contexts: string[] | undefined;
+	const contextArgIndex = process.argv.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
+	
+	if (contextArgIndex !== -1) {
+		let contextValue: string;
+		const contextArg = process.argv[contextArgIndex];
+		
+		if (contextArg.startsWith("--context=")) {
+			// Handle --context=value format
+			contextValue = contextArg.substring("--context=".length);
+		} else {
+			// Handle --context value format
+			if (contextArgIndex + 1 < process.argv.length) {
+				contextValue = process.argv[contextArgIndex + 1];
+			} else {
+				fatal("--context parameter requires a value");
+			}
+		}
+		
+		contexts = contextValue
+			.split(",")
+			.map((s: string) => s.trim())
+			.filter(Boolean);
+	}
 
 	if (!token)
 		fatal("Missing GITLAB_TOKEN env value. Set it in .env or environment.");
@@ -93,6 +124,9 @@ function parseConfig(): Config {
 		logInfo,
 		perPage,
 		cloneDir,
+		contexts,
+		allFlag,
+		clearContextFlag,
 	};
 }
 
@@ -130,8 +164,16 @@ function initDb(dbPath: string) {
 		key TEXT PRIMARY KEY,
 		value TEXT
 	);`);
+	db.run(`CREATE TABLE IF NOT EXISTS contexts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		prefix TEXT NOT NULL UNIQUE,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);`);
 	db.run(
 		`CREATE INDEX IF NOT EXISTS idx_projects_full_path ON projects(full_path);`,
+	);
+	db.run(
+		`CREATE INDEX IF NOT EXISTS idx_contexts_prefix ON contexts(prefix);`,
 	);
 }
 
@@ -171,6 +213,124 @@ let upsertStmt: ReturnType<Database["query"]>;
 
 function prepareStatements() {
 	upsertStmt = db.query(upsertStmtSql);
+}
+
+function clearDataStore() {
+	log("INFO", "Clearing data store...");
+	db.run("DELETE FROM projects");
+	db.run("DELETE FROM meta");
+	db.run("DELETE FROM contexts");
+	log("INFO", "Data store cleared successfully.");
+}
+
+// ----------------------- Context Management -----------------------
+function addContexts(contexts: string[]) {
+	if (!contexts || contexts.length === 0) return;
+	
+	const insertStmt = db.query("INSERT OR IGNORE INTO contexts (prefix) VALUES (?)");
+	db.run("BEGIN");
+	try {
+		for (const context of contexts) {
+			insertStmt.run(context);
+		}
+		db.run("COMMIT");
+		log("INFO", `Added ${contexts.length} context(s): ${contexts.join(", ")}`);
+	} catch (e) {
+		db.run("ROLLBACK");
+		throw e;
+	}
+}
+
+function getStoredContexts(): string[] {
+	const stmt = db.query("SELECT prefix FROM contexts ORDER BY prefix");
+	const rows = stmt.all() as { prefix: string }[];
+	return rows.map(row => row.prefix);
+}
+
+function clearStoredContexts() {
+	db.run("DELETE FROM contexts");
+	log("INFO", "Cleared all stored context filters.");
+}
+
+function filterProjectsByContexts(contexts: string[]): PickResult[] {
+	if (!contexts || contexts.length === 0) {
+		return loadAllProjects();
+	}
+	
+	// Build WHERE clause for matching any of the context prefixes
+	const placeholders = contexts.map(() => "full_path LIKE ?").join(" OR ");
+	const sql = `SELECT id, full_path, name, web_url FROM projects WHERE ${placeholders} ORDER BY full_path`;
+	const params = contexts.map(context => `${context}%`);
+	
+	log("DEBUG", `Filtering projects with contexts: ${contexts.join(", ")}`);
+	log("DEBUG", `SQL query: ${sql}`);
+	log("DEBUG", `Parameters: ${params.join(", ")}`);
+	
+	const stmt = db.query(sql);
+	const rows = stmt.all(...params) as {
+		id: number;
+		full_path: string;
+		name: string;
+		web_url: string;
+	}[];
+	
+	log("DEBUG", `Found ${rows.length} projects matching contexts`);
+	if (rows.length > 0 && config.debug) {
+		log("DEBUG", `First few matches: ${rows.slice(0, 3).map(r => r.full_path).join(", ")}`);
+	}
+	
+	return rows.map(r => ({
+		id: r.id,
+		full_path: r.full_path,
+		name: r.name,
+		web_url: r.web_url,
+		action: "open" as const,
+	}));
+}
+
+// ----------------------- Progress Bar -----------------------
+class ProgressBar {
+	private total: number;
+	private current: number = 0;
+	private width: number = 40;
+	private lastOutput: string = "";
+
+	constructor(total: number) {
+		this.total = total;
+	}
+
+	update(current: number) {
+		this.current = current;
+		this.render();
+	}
+
+	increment() {
+		this.current++;
+		this.render();
+	}
+
+	private render() {
+		if (!config.logInfo) return; // Only show progress when logging is enabled
+
+		const percentage = Math.round((this.current / this.total) * 100);
+		const filled = Math.round((this.current / this.total) * this.width);
+		const empty = this.width - filled;
+		
+		const bar = "█".repeat(filled) + "░".repeat(empty);
+		const output = `\r[${bar}] ${percentage}% (${this.current}/${this.total})`;
+		
+		// Clear previous line and write new progress
+		if (this.lastOutput) {
+			process.stderr.write("\r" + " ".repeat(this.lastOutput.length) + "\r");
+		}
+		process.stderr.write(output);
+		this.lastOutput = output;
+	}
+
+	finish() {
+		if (!config.logInfo) return;
+		process.stderr.write("\n");
+	}
 }
 
 // ----------------------- Network Helpers -----------------------
@@ -215,7 +375,7 @@ async function getProjectCount(scope: string): Promise<number> {
 // Membership (user-access) projects count via REST headers fallback only
 async function getMembershipProjectCount(): Promise<number> {
 	const rest = await gitlabFetch(
-		`/api/v4/projects?membership=true&per_page=1&page=1&simple=true`,
+		`/api/v4/projects?membership=true&per_page=1&page=1&simple=true&archived=false`,
 	);
 	if (!rest.ok)
 		throw new Error(`REST membership first page failed: ${rest.status}`);
@@ -227,7 +387,7 @@ async function fetchMembershipProjectsPage(
 	page: number,
 	perPage: number,
 ): Promise<ProjectRow[]> {
-	const url = `/api/v4/projects?membership=true&per_page=${perPage}&page=${page}&simple=true`;
+	const url = `/api/v4/projects?membership=true&per_page=${perPage}&page=${page}&simple=true&archived=false`;
 	const res = await gitlabFetch(url);
 	if (!res.ok)
 		throw new Error(
@@ -261,7 +421,7 @@ async function fetchProjectsPage(
 	page: number,
 	perPage: number,
 ): Promise<ProjectRow[]> {
-	const url = `/api/v4/groups/${encodeURIComponent(scope)}/projects?per_page=${perPage}&page=${page}&with_shared=false&include_subgroups=true&simple=true`;
+	const url = `/api/v4/groups/${encodeURIComponent(scope)}/projects?per_page=${perPage}&page=${page}&with_shared=false&include_subgroups=true&simple=true&archived=false`;
 	const res = await gitlabFetch(url);
 	if (!res.ok)
 		throw new Error(
@@ -297,13 +457,21 @@ async function fetchAllProjectsForScope(scope: string): Promise<void> {
 	log("INFO", `Scope ${scope} total projects reported: ${total}`);
 	if (total === 0) return; // nothing to do
 	const totalPages = Math.ceil(total / config.perPage);
+	const progressBar = new ProgressBar(totalPages);
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
+	let completedPages = 0;
+	
 	await Promise.all(
 		pages.map((p) =>
-			limiter(() => retry(3, () => fetchAndStorePage(scope, p))),
+			limiter(async () => {
+				await retry(3, () => fetchAndStorePage(scope, p));
+				completedPages++;
+				progressBar.update(completedPages);
+			}),
 		),
 	);
+	progressBar.finish();
 }
 
 async function fetchAllMembershipProjects(): Promise<void> {
@@ -312,13 +480,21 @@ async function fetchAllMembershipProjects(): Promise<void> {
 	log("INFO", `Membership total projects reported: ${total}`);
 	if (total === 0) return;
 	const totalPages = Math.ceil(total / config.perPage);
+	const progressBar = new ProgressBar(totalPages);
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
+	let completedPages = 0;
+	
 	await Promise.all(
 		pages.map((p) =>
-			limiter(() => retry(3, () => fetchMembershipAndStorePage(p))),
+			limiter(async () => {
+				await retry(3, () => fetchMembershipAndStorePage(p));
+				completedPages++;
+				progressBar.update(completedPages);
+			}),
 		),
 	);
+	progressBar.finish();
 }
 
 async function fetchMembershipAndStorePage(page: number) {
@@ -443,10 +619,14 @@ function loadAllProjects(): PickResult[] {
 	return rows;
 }
 
-async function pickProject(): Promise<PickResult | undefined> {
-	const rows = loadAllProjects();
+async function pickProject(initialQuery?: string, contexts?: string[]): Promise<PickResult | undefined> {
+	const rows = contexts ? filterProjectsByContexts(contexts) : loadAllProjects();
 	if (rows.length === 0) {
-		log("WARN", "No projects available in cache.");
+		if (contexts && contexts.length > 0) {
+			log("WARN", `No projects found matching context prefixes: ${contexts.join(", ")}`);
+		} else {
+			log("WARN", "No projects available in cache.");
+		}
 		return undefined;
 	}
 	// Use fzf for interactive selection
@@ -455,14 +635,18 @@ async function pickProject(): Promise<PickResult | undefined> {
 	{
 		const input = rows.map((r) => `${r.full_path}\t${r.name}`).join("\n");
 		const expectArg = `--expect=tab`;
-		const proc = Bun.spawn(
-			["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"],
-			{
-				stdin: "pipe",
-				stdout: "pipe",
-				stderr: "inherit",
-			},
-		);
+		const fzfArgs = ["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"];
+		
+		// Add initial query if provided
+		if (initialQuery) {
+			fzfArgs.push("--query", initialQuery);
+		}
+		
+		const proc = Bun.spawn(fzfArgs, {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "inherit",
+		});
 		if (proc.stdin) {
 			proc.stdin.write(input);
 			proc.stdin.end();
@@ -551,7 +735,7 @@ async function runPostCloneAction(projDir: string) {
 	log("INFO", `Running post-clone action in ${projDir}: ${action}`);
 	try {
 		// Run action via shell so users can provide compound commands like `code .`
-		const proc = Bun.spawn(["sh", "-lc", action], {
+		const proc = Bun.spawn(["zsh", "-lc", action], {
 			cwd: projDir,
 			stdout: "inherit",
 			stderr: "inherit",
@@ -570,12 +754,28 @@ async function runPostCloneAction(projDir: string) {
 // ----------------------- Help -----------------------
 function showHelp() {
 	console.log(`GitLab Search CLI (gls)
-Usage: gls [options]
+Usage: gls [options] [query]
+
+Arguments:
+	query             Initial search query for fzf (optional)
 
 Options:
-	--help            Show this help
+	--help            Show this help test
 	--debug           Enable debug logging
 	--log             Enable info-level logging
+	--reset           Clear data store and rebuild cache
+	--context <prefixes>  Comma-separated list of full path prefixes to filter projects
+	                    (contexts are stored and automatically reused in future runs)
+	--clearcontext    Clear all stored context filters from database
+	--all             Disable context filtering for this run (search everything)
+
+Examples:
+	gls               Interactive project selection (uses stored contexts if any)
+	gls identity      Search for projects matching "identity" (uses stored contexts if any)
+	gls "my project"  Search for projects matching "my project" (uses stored contexts if any)
+	gls --context "acme/backend,acme/frontend"  Set context filters (stored for future use)
+	gls --all         Search all projects, ignoring stored context filters
+	gls --clearcontext Clear stored context filters permanently
 
 Requirements:
 	fzf must be installed.
@@ -604,15 +804,80 @@ async function main() {
 		showHelp();
 		return;
 	}
+
 	config = parseConfig();
 	initDb(config.dbPath);
 	prepareStatements();
+
+	const isReset = process.argv.includes("--reset");
+	
+	if (isReset) {
+		// Force logging to be enabled for reset operations
+		config.logInfo = true;
+		clearDataStore();
+		log("INFO", "Rebuilding data store...");
+		const ok = await performRefresh();
+		if (!ok) fatal("Data store rebuild failed.");
+		log("INFO", "Data store rebuild completed.");
+		return;
+	}
+
+	// Handle --clearcontext flag
+	if (config.clearContextFlag) {
+		clearStoredContexts();
+		return;
+	}
+
+	// Extract positional arguments (non-flag arguments and skip --context value)
+	let filteredArgs = process.argv.slice(2);
+	
+	// Remove --context and its value from the args for positional parsing
+	const contextArgIndex = filteredArgs.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
+	if (contextArgIndex !== -1) {
+		if (filteredArgs[contextArgIndex].startsWith("--context=")) {
+			// Remove just the --context=value argument
+			filteredArgs.splice(contextArgIndex, 1);
+		} else {
+			// Remove --context and its separate value argument
+			filteredArgs.splice(contextArgIndex, 2);
+		}
+	}
+	
+	// Filter out all flags to get positional arguments
+	const positionalArgs = filteredArgs.filter((arg: string) => 
+		!arg.startsWith("--") || arg.startsWith("--context=")
+	).filter((arg: string) => !arg.startsWith("--context="));
+	const initialQuery = positionalArgs.length > 0 ? positionalArgs.join(" ") : undefined;
+
+	// Add contexts to database if provided
+	if (config.contexts) {
+		addContexts(config.contexts);
+	}
+
+	// Get stored contexts from database and use them for filtering
+	const storedContexts = getStoredContexts();
+	let activeContexts: string[] | undefined;
+	
+	if (config.allFlag) {
+		// --all flag disables all context filtering for this run
+		activeContexts = undefined;
+		log("INFO", "Context filtering disabled for this run (--all flag)");
+	} else {
+		// Use provided contexts or stored contexts
+		activeContexts = config.contexts || (storedContexts.length > 0 ? storedContexts : undefined);
+		
+		if (activeContexts && activeContexts.length > 0) {
+			log("INFO", `Using context filters: ${activeContexts.join(", ")}`);
+		}
+	}
 
 	const hasProjects =
 		(db.query("SELECT COUNT(*) as c FROM projects").get() as { c: number }).c >
 		0;
 	const cold = !hasProjects;
 	if (cold) {
+		// Force logging to be enabled for initial data fetch
+		config.logInfo = true;
 		log("INFO", "Initial data fetch in progress...");
 		const ok = await performRefresh();
 		if (!ok) fatal("Initial fetch failed.");
@@ -628,7 +893,7 @@ async function main() {
 		}
 	}
 
-	const picked = await pickProject();
+	const picked = await pickProject(initialQuery, activeContexts);
 	if (!picked) {
 		log("INFO", "No project selected.");
 		return;
