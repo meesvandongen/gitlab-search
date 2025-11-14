@@ -1,6 +1,6 @@
 {
 	"name": "@mvd/gls",
-	"version": "0.0.4",
+	"version": "0.0.5",
 	"description": "Interactive GitLab project search CLI (gls) with SWR caching",
 	"type": "module",
 	"private": false,

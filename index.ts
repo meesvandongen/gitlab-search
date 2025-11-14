@@ -81,15 +81,17 @@ function parseConfig(): Config {
 	const cloneDir = env.GITLAB_CLONE_DIRECTORY || undefined;
 	const allFlag = process.argv.includes("--all");
 	const clearContextFlag = process.argv.includes("--clearcontext");
-	
+
 	// Parse --context parameter (supports both --context=value and --context value)
 	let contexts: string[] | undefined;
-	const contextArgIndex = process.argv.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
-	
+	const contextArgIndex = process.argv.findIndex(
+		(arg: string) => arg === "--context" || arg.startsWith("--context="),
+	);
+
 	if (contextArgIndex !== -1) {
 		let contextValue: string;
 		const contextArg = process.argv[contextArgIndex];
-		
+
 		if (contextArg.startsWith("--context=")) {
 			// Handle --context=value format
 			contextValue = contextArg.substring("--context=".length);
@@ -101,7 +103,7 @@ function parseConfig(): Config {
 				fatal("--context parameter requires a value");
 			}
 		}
-		
+
 		contexts = contextValue
 			.split(",")
 			.map((s: string) => s.trim())
@@ -172,9 +174,7 @@ function initDb(dbPath: string) {
 	db.run(
 		`CREATE INDEX IF NOT EXISTS idx_projects_full_path ON projects(full_path);`,
 	);
-	db.run(
-		`CREATE INDEX IF NOT EXISTS idx_contexts_prefix ON contexts(prefix);`,
-	);
+	db.run(`CREATE INDEX IF NOT EXISTS idx_contexts_prefix ON contexts(prefix);`);
 }
 
 function getMeta(key: string): string | undefined {
@@ -226,8 +226,10 @@ function clearDataStore() {
 // ----------------------- Context Management -----------------------
 function addContexts(contexts: string[]) {
 	if (!contexts || contexts.length === 0) return;
-	
-	const insertStmt = db.query("INSERT OR IGNORE INTO contexts (prefix) VALUES (?)");
+
+	const insertStmt = db.query(
+		"INSERT OR IGNORE INTO contexts (prefix) VALUES (?)",
+	);
 	db.run("BEGIN");
 	try {
 		for (const context of contexts) {
@@ -244,7 +246,7 @@ function addContexts(contexts: string[]) {
 function getStoredContexts(): string[] {
 	const stmt = db.query("SELECT prefix FROM contexts ORDER BY prefix");
 	const rows = stmt.all() as { prefix: string }[];
-	return rows.map(row => row.prefix);
+	return rows.map((row) => row.prefix);
 }
 
 function clearStoredContexts() {
@@ -256,16 +258,16 @@ function filterProjectsByContexts(contexts: string[]): PickResult[] {
 	if (!contexts || contexts.length === 0) {
 		return loadAllProjects();
 	}
-	
+
 	// Build WHERE clause for matching any of the context prefixes
 	const placeholders = contexts.map(() => "full_path LIKE ?").join(" OR ");
 	const sql = `SELECT id, full_path, name, web_url FROM projects WHERE ${placeholders} ORDER BY full_path`;
-	const params = contexts.map(context => `${context}%`);
-	
+	const params = contexts.map((context) => `${context}%`);
+
 	log("DEBUG", `Filtering projects with contexts: ${contexts.join(", ")}`);
 	log("DEBUG", `SQL query: ${sql}`);
 	log("DEBUG", `Parameters: ${params.join(", ")}`);
-	
+
 	const stmt = db.query(sql);
 	const rows = stmt.all(...params) as {
 		id: number;
@@ -273,13 +275,19 @@ function filterProjectsByContexts(contexts: string[]): PickResult[] {
 		name: string;
 		web_url: string;
 	}[];
-	
+
 	log("DEBUG", `Found ${rows.length} projects matching contexts`);
 	if (rows.length > 0 && config.debug) {
-		log("DEBUG", `First few matches: ${rows.slice(0, 3).map(r => r.full_path).join(", ")}`);
+		log(
+			"DEBUG",
+			`First few matches: ${rows
+				.slice(0, 3)
+				.map((r) => r.full_path)
+				.join(", ")}`,
+		);
 	}
-	
-	return rows.map(r => ({
+
+	return rows.map((r) => ({
 		id: r.id,
 		full_path: r.full_path,
 		name: r.name,
@@ -315,10 +323,10 @@ class ProgressBar {
 		const percentage = Math.round((this.current / this.total) * 100);
 		const filled = Math.round((this.current / this.total) * this.width);
 		const empty = this.width - filled;
-		
+
 		const bar = "█".repeat(filled) + "░".repeat(empty);
 		const output = `\r[${bar}] ${percentage}% (${this.current}/${this.total})`;
-		
+
 		// Clear previous line and write new progress
 		if (this.lastOutput) {
 			process.stderr.write("\r" + " ".repeat(this.lastOutput.length) + "\r");
@@ -461,7 +469,7 @@ async function fetchAllProjectsForScope(scope: string): Promise<void> {
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
 	let completedPages = 0;
-	
+
 	await Promise.all(
 		pages.map((p) =>
 			limiter(async () => {
@@ -484,7 +492,7 @@ async function fetchAllMembershipProjects(): Promise<void> {
 	const limiter = concurrent(config.maxConcurrency);
 	const pages: number[] = Array.from({ length: totalPages }, (_, i) => i + 1);
 	let completedPages = 0;
-	
+
 	await Promise.all(
 		pages.map((p) =>
 			limiter(async () => {
@@ -619,11 +627,19 @@ function loadAllProjects(): PickResult[] {
 	return rows;
 }
 
-async function pickProject(initialQuery?: string, contexts?: string[]): Promise<PickResult | undefined> {
-	const rows = contexts ? filterProjectsByContexts(contexts) : loadAllProjects();
+async function pickProject(
+	initialQuery?: string,
+	contexts?: string[],
+): Promise<PickResult | undefined> {
+	const rows = contexts
+		? filterProjectsByContexts(contexts)
+		: loadAllProjects();
 	if (rows.length === 0) {
 		if (contexts && contexts.length > 0) {
-			log("WARN", `No projects found matching context prefixes: ${contexts.join(", ")}`);
+			log(
+				"WARN",
+				`No projects found matching context prefixes: ${contexts.join(", ")}`,
+			);
 		} else {
 			log("WARN", "No projects available in cache.");
 		}
@@ -636,12 +652,12 @@ async function pickProject(initialQuery?: string, contexts?: string[]): Promise<
 		const input = rows.map((r) => `${r.full_path}\t${r.name}`).join("\n");
 		const expectArg = `--expect=tab`;
 		const fzfArgs = ["fzf", expectArg, "--with-nth=1,2", "--delimiter=\t"];
-		
+
 		// Add initial query if provided
 		if (initialQuery) {
 			fzfArgs.push("--query", initialQuery);
 		}
-		
+
 		const proc = Bun.spawn(fzfArgs, {
 			stdin: "pipe",
 			stdout: "pipe",
@@ -662,8 +678,8 @@ async function pickProject(initialQuery?: string, contexts?: string[]): Promise<
 			selectionLine = lines[1];
 		}
 		if (!selectionLine) return undefined;
-		const [full_path, name] = selectionLine.split("\t");
-		const proj = rows.find((r) => r.full_path === full_path && r.name === name);
+		const [full_path] = selectionLine.split("\t");
+		const proj = rows.find((r) => r.full_path === full_path);
 		if (!proj) return undefined;
 		return { ...proj, action: triggeredKey ? "clone" : "open" };
 	}
@@ -810,7 +826,7 @@ async function main() {
 	prepareStatements();
 
 	const isReset = process.argv.includes("--reset");
-	
+
 	if (isReset) {
 		// Force logging to be enabled for reset operations
 		config.logInfo = true;
@@ -830,9 +846,11 @@ async function main() {
 
 	// Extract positional arguments (non-flag arguments and skip --context value)
 	let filteredArgs = process.argv.slice(2);
-	
+
 	// Remove --context and its value from the args for positional parsing
-	const contextArgIndex = filteredArgs.findIndex((arg: string) => arg === "--context" || arg.startsWith("--context="));
+	const contextArgIndex = filteredArgs.findIndex(
+		(arg: string) => arg === "--context" || arg.startsWith("--context="),
+	);
 	if (contextArgIndex !== -1) {
 		if (filteredArgs[contextArgIndex].startsWith("--context=")) {
 			// Remove just the --context=value argument
@@ -842,12 +860,15 @@ async function main() {
 			filteredArgs.splice(contextArgIndex, 2);
 		}
 	}
-	
+
 	// Filter out all flags to get positional arguments
-	const positionalArgs = filteredArgs.filter((arg: string) => 
-		!arg.startsWith("--") || arg.startsWith("--context=")
-	).filter((arg: string) => !arg.startsWith("--context="));
-	const initialQuery = positionalArgs.length > 0 ? positionalArgs.join(" ") : undefined;
+	const positionalArgs = filteredArgs
+		.filter(
+			(arg: string) => !arg.startsWith("--") || arg.startsWith("--context="),
+		)
+		.filter((arg: string) => !arg.startsWith("--context="));
+	const initialQuery =
+		positionalArgs.length > 0 ? positionalArgs.join(" ") : undefined;
 
 	// Add contexts to database if provided
 	if (config.contexts) {
@@ -857,15 +878,17 @@ async function main() {
 	// Get stored contexts from database and use them for filtering
 	const storedContexts = getStoredContexts();
 	let activeContexts: string[] | undefined;
-	
+
 	if (config.allFlag) {
 		// --all flag disables all context filtering for this run
 		activeContexts = undefined;
 		log("INFO", "Context filtering disabled for this run (--all flag)");
 	} else {
 		// Use provided contexts or stored contexts
-		activeContexts = config.contexts || (storedContexts.length > 0 ? storedContexts : undefined);
-		
+		activeContexts =
+			config.contexts ||
+			(storedContexts.length > 0 ? storedContexts : undefined);
+
 		if (activeContexts && activeContexts.length > 0) {
 			log("INFO", `Using context filters: ${activeContexts.join(", ")}`);
 		}
