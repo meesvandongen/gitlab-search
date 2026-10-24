@@ -90,7 +90,7 @@ function parseConfig(): Config {
 
 	if (contextArgIndex !== -1) {
 		let contextValue: string;
-		const contextArg = process.argv[contextArgIndex];
+		const contextArg = process.argv[contextArgIndex]!;
 
 		if (contextArg.startsWith("--context=")) {
 			// Handle --context=value format
@@ -98,7 +98,7 @@ function parseConfig(): Config {
 		} else {
 			// Handle --context value format
 			if (contextArgIndex + 1 < process.argv.length) {
-				contextValue = process.argv[contextArgIndex + 1];
+				contextValue = process.argv[contextArgIndex + 1]!;
 			} else {
 				fatal("--context parameter requires a value");
 			}
@@ -852,7 +852,7 @@ async function main() {
 		(arg: string) => arg === "--context" || arg.startsWith("--context="),
 	);
 	if (contextArgIndex !== -1) {
-		if (filteredArgs[contextArgIndex].startsWith("--context=")) {
+		if (filteredArgs[contextArgIndex]!.startsWith("--context=")) {
 			// Remove just the --context=value argument
 			filteredArgs.splice(contextArgIndex, 1);
 		} else {

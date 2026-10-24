@@ -34,19 +34,24 @@
 	},
 	"module": "index.ts",
 	"scripts": {
-		"gls": "bun run index.ts",
-		"dev": "bun run index.ts -- --debug"
+		"gls": "bun index.ts",
+		"dev": "bun index.ts --debug",
+		"lint": "vp lint",
+		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"already": "^3.4.1"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "latest",
+		"typescript": "^5.9.3",
+		"vite-plus": "catalog:"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
 	},
 	"publishConfig": {
 		"access": "public"
-	}
+	},
+	"packageManager": "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
 }

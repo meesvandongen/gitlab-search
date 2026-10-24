@@ -13,10 +13,10 @@ Interactive GitLab project search CLI with a local SQLite cache, stale-while-rev
 
 ## Installation
 
-fzf must be installed and on your PATH (run `fzf --version`).
+fzf must be installed and on your PATH (run `fzf --version`). `gls` runs on [Bun](https://bun.sh) (it uses `bun:sqlite`), so Bun must be installed too.
 
 ```bash
-bun install @mvd/gls -g
+pnpm add -g @mvd/gls
 ```
 
 ## Usage
@@ -123,3 +123,13 @@ gls --clearcontext           # Remove all stored context filters
 - Use `GLS_REFRESH_MIN_INTERVAL_MINUTES` to balance freshness vs. performance
 - Enable logging (`--log`) to monitor refresh and filtering operations
 
+## Development
+
+The CLI runs on Bun; dependencies are managed with pnpm (enable it with `corepack enable`).
+
+```bash
+pnpm install
+pnpm run gls -- --help       # Run the CLI from source
+pnpm run lint                # vp lint (oxlint, type-aware)
+pnpm run typecheck           # tsc --noEmit
+```
