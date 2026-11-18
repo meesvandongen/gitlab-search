@@ -13,7 +13,7 @@
 import { Database } from "bun:sqlite";
 import { concurrent, retry } from "already";
 import path from "path";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 
 // Expand a leading tilde to the user's HOME directory. Only used for DB path.
 function untildify(p: string): string {
@@ -40,6 +40,7 @@ interface Config {
 	logInfo: boolean;
 	perPage: number;
 	cloneDir?: string;
+	cloneGroupDirs: boolean; // clone into subdirectories mirroring the group path
 	contexts?: string[]; // context prefixes for filtering
 	allFlag: boolean; // disable context filtering for this run
 	clearContextFlag: boolean; // clear stored contexts
@@ -79,6 +80,11 @@ function parseConfig(): Config {
 		["1", "true", "yes", "on"].includes((env.GLS_LOG || "").toLowerCase());
 	const perPage = 100; // GitLab max typical page size
 	const cloneDir = env.GITLAB_CLONE_DIRECTORY || undefined;
+	const cloneGroupDirs =
+		process.argv.includes("--group-dirs") ||
+		["1", "true", "yes", "on"].includes(
+			(env.GLS_CLONE_GROUP_DIRS || "").toLowerCase(),
+		);
 	const allFlag = process.argv.includes("--all");
 	const clearContextFlag = process.argv.includes("--clearcontext");
 
@@ -126,6 +132,7 @@ function parseConfig(): Config {
 		logInfo,
 		perPage,
 		cloneDir,
+		cloneGroupDirs,
 		contexts,
 		allFlag,
 		clearContextFlag,
@@ -712,9 +719,15 @@ async function cloneProject(proj: PickResult) {
 		const cloneUrl = host.includes(":")
 			? `ssh://${host}/${proj.full_path}.git` // if port present use ssh:// form
 			: `git@${host}:${proj.full_path}.git`;
-		const targetDir = config.cloneDir.replace(/~\//, `${Bun.env.HOME || ""}/`);
-		const projectName = proj.full_path.split("/").pop() || proj.name;
-		const projDir = path.join(targetDir, projectName);
+		const targetDir = untildify(config.cloneDir);
+		const segments = proj.full_path.split("/").filter(Boolean);
+		const projectName = segments.pop() || proj.name;
+		// Optionally mirror the GitLab group hierarchy below the clone directory,
+		// e.g. acme/backend/api -> <cloneDir>/acme/backend/api
+		const parentDir = config.cloneGroupDirs
+			? path.join(targetDir, ...segments)
+			: targetDir;
+		const projDir = path.join(parentDir, projectName);
 
 		// If the repo already exists, skip cloning but still run any post-clone action
 		if (existsSync(projDir)) {
@@ -723,10 +736,11 @@ async function cloneProject(proj: PickResult) {
 			return;
 		}
 
-		const cmd = ["git", "clone", cloneUrl];
-		log("INFO", `Cloning (SSH) ${proj.full_path} -> ${targetDir}`);
+		mkdirSync(parentDir, { recursive: true });
+		const cmd = ["git", "clone", cloneUrl, projectName];
+		log("INFO", `Cloning (SSH) ${proj.full_path} -> ${projDir}`);
 		const proc = Bun.spawn(cmd, {
-			cwd: targetDir,
+			cwd: parentDir,
 			stdout: "inherit",
 			stderr: "inherit",
 		});
@@ -784,6 +798,8 @@ Options:
 	                    (contexts are stored and automatically reused in future runs)
 	--clearcontext    Clear all stored context filters from database
 	--all             Disable context filtering for this run (search everything)
+	--group-dirs      Clone into subdirectories matching the project's groups
+	                  (e.g. <clone dir>/acme/backend/api instead of <clone dir>/api)
 
 Examples:
 	gls               Interactive project selection (uses stored contexts if any)
@@ -807,6 +823,7 @@ Environment Variables:
 	GLS_LOG                          Enable info logging (1/true or use --log)
 	GLS_DEBUG                        Enable debug logging (1/true or use --debug)
 	GITLAB_CLONE_DIRECTORY           Directory used for clone action (required for clone)
+	GLS_CLONE_GROUP_DIRS             Clone into subdirectories matching the project's groups (1/true or use --group-dirs)
 	GLS_POST_CLONE_ACTION            Optional shell command to run from the cloned repository directory after clone or when the repo already exists (example: "code .")
 
 	Notes:
