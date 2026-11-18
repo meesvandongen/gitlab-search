@@ -71,6 +71,7 @@ gls --debug                  # Enable debug logging
 | `--context <prefixes>` | Set context filters (comma-separated prefixes, stored permanently) |
 | `--clearcontext` | Clear all stored context filters from database |
 | `--all` | Disable context filtering for this run (search everything) |
+| `--group-dirs` | Clone into subdirectories matching the project's groups (see below) |
 
 ## Environment Variables
 
@@ -86,6 +87,7 @@ gls --debug                  # Enable debug logging
 | `GLS_LOG` | no | 0 | Enable info-level logging (set to 1/true) |
 | `GLS_DEBUG` | no | 0 | Enable debug logging (set to 1/true or use --debug) |
 | `GITLAB_CLONE_DIRECTORY` | no | - | Directory where projects are cloned when clone key (`tab`) is pressed |
+| `GLS_CLONE_GROUP_DIRS` | no | 0 | Clone into subdirectories matching the project's groups (set to 1/true or use `--group-dirs`) |
 | `GLS_POST_CLONE_ACTION` | no | - | Shell command to run after clone/when repo exists (e.g., `code .`) |
 
 ### Configuration Example
@@ -98,6 +100,19 @@ GITLAB_CLONE_DIRECTORY=~/code
 GLS_POST_CLONE_ACTION=code .
 GLS_MAX_CONCURRENCY=8
 ```
+
+### Group Subdirectories
+
+By default, a cloned project lands directly in `GITLAB_CLONE_DIRECTORY` under its project name.
+Set `GLS_CLONE_GROUP_DIRS=1` (or pass `--group-dirs`) to mirror the GitLab group hierarchy instead:
+
+| Project | Default | With group subdirectories |
+|---------|---------|---------------------------|
+| `acme/backend/api` | `~/code/api` | `~/code/acme/backend/api` |
+| `acme/frontend/web` | `~/code/web` | `~/code/acme/frontend/web` |
+
+Missing group directories are created automatically. This avoids name collisions between
+projects with the same name in different groups.
 
 ## Advanced Usage
 
