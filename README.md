@@ -138,3 +138,11 @@ gls --clearcontext           # Remove all stored context filters
 - Use `GLS_REFRESH_MIN_INTERVAL_MINUTES` to balance freshness vs. performance
 - Enable logging (`--log`) to monitor refresh and filtering operations
 
+
+## Releasing
+
+Releases use [Changesets](https://github.com/changesets/changesets) and npm [trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC), so no npm token is stored in the repository.
+
+1. In a PR with a user-facing change, run `bun run changeset`, pick the bump type, describe the change and commit the generated `.changeset/*.md` file.
+2. When that PR merges to `main`, the **Release** workflow opens (or updates) a **Version Packages** PR that bumps the version and updates `CHANGELOG.md`.
+3. Merging the **Version Packages** PR runs the workflow again, which publishes to npm, pushes a git tag and creates a GitHub release.
