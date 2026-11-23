@@ -21,7 +21,7 @@ jobs:
       # npm >= 11.5.1 is required for trusted publishing; Node 24 ships it.
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - run: bun install --frozen-lockfile
       - uses: changesets/action@v2
         with:
